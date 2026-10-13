@@ -1,6 +1,7 @@
 import type {
   EnvironmentId,
   OrchestrationV2ProjectedTurnItem,
+  OrchestrationV2TurnItem,
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -13,8 +14,9 @@ import {
 } from "@t3tools/client-runtime/work-log/item-detail";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import { isJavaScriptReplTool } from "@t3tools/shared/toolActivity";
-import { ExternalLinkIcon, GitBranchIcon, RotateCcwIcon } from "lucide-react";
-import { memo, Suspense, use, useMemo } from "react";
+import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import { CheckIcon, ExternalLinkIcon, GitBranchIcon, RotateCcwIcon } from "lucide-react";
+import { memo, Suspense, use, useMemo, type ReactNode } from "react";
 
 import { useTheme } from "../../hooks/useTheme";
 import { cn } from "../../lib/utils";
@@ -23,12 +25,22 @@ import { getSyntaxHighlighterPromise } from "../../lib/syntaxHighlighting";
 import { useTurnItemDetail } from "../../state/queries";
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import ChatMarkdown, { ChatMarkdownAssetImage } from "../ChatMarkdown";
 import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { resolveExternalWebLinkHref } from "./externalLinkContextMenu";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
+import { MessageCopyButton } from "./MessageCopyButton";
 import { ShellCommandBlock } from "./ShellCommandBlock";
+import {
+  parseAnsi,
+  toolCallHeading,
+  toolCallOutcome,
+  turnItemDurationMs,
+  type AnsiColor,
+  type ToolCallOutcome,
+} from "./toolCallPresentation";
 
 interface V2ItemInspectorProps {
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
@@ -159,6 +171,38 @@ interface ToolOutputState {
   readonly onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
 }
 
+const ANSI_COLOR_CLASS_NAMES: Record<AnsiColor, string> = {
+  red: "text-red-600 dark:text-red-400",
+  green: "text-emerald-600 dark:text-emerald-400",
+  yellow: "text-amber-600 dark:text-amber-300",
+  blue: "text-blue-600 dark:text-blue-400",
+  magenta: "text-fuchsia-600 dark:text-fuchsia-400",
+  cyan: "text-cyan-600 dark:text-cyan-400",
+  gray: "text-muted-foreground",
+};
+
+function AnsiText({ text }: { readonly text: string }) {
+  const segments = useMemo(() => parseAnsi(text), [text]);
+  if (segments.length === 1 && segments[0]?.color === null) return segments[0].text;
+  return segments.map((segment, index) =>
+    segment.color === null && !segment.bold && !segment.dim ? (
+      segment.text
+    ) : (
+      // Runs are positional and never reorder for a given text.
+      <span
+        key={index}
+        className={cn(
+          segment.color && ANSI_COLOR_CLASS_NAMES[segment.color],
+          segment.bold && "font-semibold",
+          segment.dim && "opacity-60",
+        )}
+      >
+        {segment.text}
+      </span>
+    ),
+  );
+}
+
 function ToolOutput(props: ToolOutputState) {
   const images = props.images.map((resource) => (
     <ChatMarkdownAssetImage
@@ -171,7 +215,9 @@ function ToolOutput(props: ToolOutputState) {
     />
   ));
   const text = props.output ? (
-    <div className="max-h-80 overflow-auto text-muted-foreground">{props.output}</div>
+    <div className="text-foreground/70">
+      <AnsiText text={props.output} />
+    </div>
   ) : props.pending ? (
     <div className="text-muted-foreground italic">Loading output…</div>
   ) : props.error ? (
@@ -187,6 +233,12 @@ function ToolOutput(props: ToolOutputState) {
   );
 }
 
+function toolOutputHasContent(props: ToolOutputState): boolean {
+  return Boolean(
+    props.output || props.images.length > 0 || props.pending || props.error || props.empty,
+  );
+}
+
 /** Fetched output for rows that show their own plain text instead of the inspector. */
 export function FetchedToolOutput(props: {
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
@@ -195,45 +247,172 @@ export function FetchedToolOutput(props: {
 }) {
   const { output } = useFetchedTurnItem(props.projectedItem, props.environmentId);
   return (
-    <div className={cn("mt-1.5 space-y-1.5", monoClassName)}>
+    <div className={cn("max-h-72 space-y-1.5 overflow-auto px-3 py-2", monoClassName)}>
       <ToolOutput {...output} onImageExpand={props.onImageExpand} />
     </div>
   );
 }
 
-/** A tool call's body: the call itself in the foreground, its result muted below. */
-function ToolCallBody(
+function ToolCallStatus({ outcome }: { readonly outcome: ToolCallOutcome }) {
+  switch (outcome.kind) {
+    case "running":
+      return <span className="text-muted-foreground">Running…</span>;
+    case "stopped":
+      return (
+        <Badge size="sm" variant="warning">
+          Stopped
+        </Badge>
+      );
+    case "failed":
+      return (
+        <Badge size="sm" variant="error">
+          {outcome.exitCode === null ? "Failed" : `exit ${outcome.exitCode}`}
+        </Badge>
+      );
+    case "succeeded":
+      return outcome.exitCode === null ? (
+        <CheckIcon aria-label="Succeeded" className="size-3.5 text-success" />
+      ) : (
+        <Badge size="sm" variant="success">
+          exit {outcome.exitCode}
+        </Badge>
+      );
+  }
+}
+
+/**
+ * A tool call's body as one card: a header naming the tool with its outcome,
+ * the call itself in the foreground, and its result in a recessed pane below.
+ */
+function ToolCallCard(
   props: ToolOutputState & {
-    readonly command?: string;
-    readonly args?: unknown;
-    readonly toolName?: string | null;
-    readonly exitCode?: number | undefined;
+    readonly heading: ReactNode;
+    readonly outcome: ToolCallOutcome;
+    readonly durationMs: number | null;
+    readonly copyText: string | null;
+    readonly copyLabel: string;
+    readonly children: ReactNode;
   },
 ) {
-  const call = toolCallLines({ command: props.command, args: props.args });
   return (
-    <div className={cn("space-y-1.5", monoClassName)}>
-      {call.command ? <ShellCommandBlock command={call.command} /> : null}
-      {call.args ? (
-        <div className="text-foreground/85">
-          {call.args.map(([key, value]) => (
-            <div key={key}>
-              <span className="text-muted-foreground">{key} </span>
-              {key === "code" && isJavaScriptReplTool(props.toolName) ? (
-                <StructuredValue value={value} language="typescript" />
-              ) : (
-                value
-              )}
-            </div>
-          ))}
+    <div className="min-w-0">
+      <div className="flex h-8 min-w-0 items-center gap-2 border-b border-border/60 ps-3 pe-1.5 text-xs text-muted-foreground">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 truncate">{props.heading}</div>
+        {props.durationMs !== null && props.outcome.kind !== "running" ? (
+          <span className="shrink-0 tabular-nums">{formatDuration(props.durationMs)}</span>
+        ) : null}
+        <span className="flex shrink-0 items-center">
+          <ToolCallStatus outcome={props.outcome} />
+        </span>
+        {props.copyText ? (
+          <MessageCopyButton
+            text={props.copyText}
+            label={props.copyLabel}
+            size="icon-xs"
+            variant="ghost"
+          />
+        ) : (
+          <span className="w-0.5" />
+        )}
+      </div>
+      {props.children}
+      {toolOutputHasContent(props) ? (
+        <div
+          className={cn(
+            "max-h-72 space-y-1.5 overflow-auto border-t border-border/60 bg-background/60 px-3 py-2",
+            monoClassName,
+          )}
+        >
+          <ToolOutput {...props} />
         </div>
       ) : null}
-      {call.argsText ? <StructuredValue value={call.argsText} highlightJson /> : null}
-      <ToolOutput {...props} />
-      {props.exitCode !== undefined && props.exitCode !== 0 ? (
-        <div className="text-destructive">exit {props.exitCode}</div>
-      ) : null}
     </div>
+  );
+}
+
+function CommandCallCard(
+  props: ToolOutputState & {
+    readonly item: Extract<OrchestrationV2TurnItem, { type: "command_execution" }>;
+  },
+) {
+  const { item, ...output } = props;
+  const call = toolCallLines({ command: item.input });
+  return (
+    <ToolCallCard
+      {...output}
+      heading={<span className="font-medium text-foreground/80">Shell</span>}
+      outcome={toolCallOutcome(item)}
+      durationMs={turnItemDurationMs(item)}
+      copyText={call.command}
+      copyLabel="Copy command"
+    >
+      {call.command ? (
+        <div className={cn("flex min-w-0 gap-2 px-3 py-2", monoClassName)}>
+          <span aria-hidden className="shrink-0 select-none text-muted-foreground/70">
+            $
+          </span>
+          <div className="min-w-0 flex-1">
+            <ShellCommandBlock command={call.command} />
+          </div>
+        </div>
+      ) : null}
+    </ToolCallCard>
+  );
+}
+
+function DynamicToolCallCard(
+  props: ToolOutputState & {
+    readonly item: Extract<OrchestrationV2TurnItem, { type: "dynamic_tool" }>;
+  },
+) {
+  const { item, ...output } = props;
+  const call = toolCallLines({ args: item.input });
+  const heading = toolCallHeading(item.toolName, item.toolSource?.name);
+  const hasCall = call.args !== null || call.argsText !== null;
+  return (
+    <ToolCallCard
+      {...output}
+      heading={
+        <>
+          {heading.source ? (
+            <span className="max-w-[40%] shrink-0 truncate">{heading.source}</span>
+          ) : null}
+          {heading.source ? <span className="shrink-0 text-muted-foreground/50">/</span> : null}
+          <span className="truncate font-mono font-medium text-foreground/80">{heading.name}</span>
+        </>
+      }
+      outcome={toolCallOutcome(item)}
+      durationMs={turnItemDurationMs(item)}
+      copyText={hasCall ? JSON.stringify(item.input, null, 2) : null}
+      copyLabel="Copy input"
+    >
+      {call.args ? (
+        <dl
+          className={cn(
+            "grid max-h-72 grid-cols-[minmax(0,max-content)_minmax(0,1fr)] gap-x-3 gap-y-1 overflow-auto px-3 py-2",
+            monoClassName,
+          )}
+        >
+          {call.args.map(([key, value]) => (
+            <div key={key} className="contents">
+              <dt className="truncate text-muted-foreground">{key}</dt>
+              <dd className="min-w-0 text-foreground/85">
+                {key === "code" && isJavaScriptReplTool(item.toolName) ? (
+                  <StructuredValue value={value} language="typescript" />
+                ) : (
+                  value
+                )}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      {call.argsText ? (
+        <div className="px-3 py-2">
+          <StructuredValue value={call.argsText} highlightJson />
+        </div>
+      ) : null}
+    </ToolCallCard>
   );
 }
 
@@ -246,8 +425,22 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
     sourceThreadId: props.projectedItem.sourceThreadId,
     sourceItemId: props.projectedItem.sourceItemId,
   });
+  if (item.type === "command_execution") {
+    return (
+      <div className="text-xs" data-v2-item-inspector={item.type}>
+        <CommandCallCard item={item} {...outputState} onImageExpand={props.onImageExpand} />
+      </div>
+    );
+  }
+  if (item.type === "dynamic_tool") {
+    return (
+      <div className="text-xs" data-v2-item-inspector={item.type}>
+        <DynamicToolCallCard item={item} {...outputState} onImageExpand={props.onImageExpand} />
+      </div>
+    );
+  }
   return (
-    <div className="space-y-2 text-xs" data-v2-item-inspector={item.type}>
+    <div className="space-y-2 p-3 text-xs" data-v2-item-inspector={item.type}>
       {item.type === "reasoning" && item.text ? (
         <div className="rounded-md border border-border/45 bg-muted/15 p-2 italic text-muted-foreground">
           <ChatMarkdown
@@ -260,15 +453,6 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
             lineBreaks
           />
         </div>
-      ) : null}
-
-      {item.type === "command_execution" ? (
-        <ToolCallBody
-          command={item.input}
-          exitCode={item.exitCode}
-          {...outputState}
-          onImageExpand={props.onImageExpand}
-        />
       ) : null}
 
       {item.type === "file_change" ? (
@@ -363,15 +547,6 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
             );
           })}
         </ul>
-      ) : null}
-
-      {item.type === "dynamic_tool" ? (
-        <ToolCallBody
-          toolName={item.toolName}
-          args={item.input}
-          {...outputState}
-          onImageExpand={props.onImageExpand}
-        />
       ) : null}
 
       {item.type === "approval_request" ? <StructuredValue value={item.prompt} /> : null}

@@ -28,11 +28,13 @@ export function WorkLogBlock({
   );
 }
 
-/** Expanded members align with the header and use the same compact row geometry. */
+/** Expanded members hang off a rail under the header icon, so the group reads as one unit. */
 export function WorkLogList({ children }: { children: ReactNode }) {
   return (
     <GroupedRows value>
-      <div className="flex min-w-0 flex-col">{children}</div>
+      <div className="ms-[13px] flex min-w-0 flex-col border-s border-border/70 ps-1.5">
+        {children}
+      </div>
     </GroupedRows>
   );
 }
@@ -82,9 +84,12 @@ const interactionClassName =
 function useRowClassName(interactive: boolean) {
   const grouped = use(GroupedRows);
   return cn(
-    "group/timeline-row relative w-full min-w-0 rounded-md px-0.5 text-left transition-colors",
-    grouped ? "py-0" : "py-0.5",
+    "group/timeline-row relative min-w-0 rounded-md py-0.5 text-left transition-colors",
+    // Standalone rows bleed into the gutter so the hover fill frames them
+    // without moving the icon off the text column.
+    grouped ? "w-full px-1.5" : "-mx-1.5 w-[calc(100%+0.75rem)] px-2",
     interactive && interactionClassName,
+    interactive && "hover:bg-foreground/[0.04] has-[[data-work-log-details]:hover]:bg-transparent",
   );
 }
 
@@ -136,9 +141,10 @@ export function WorkLogDetails({
         kind === "text"
           ? "ms-7 flex max-h-96 flex-col gap-3 overflow-auto px-0.5 py-1 select-text"
           : kind === "panel"
-            ? "mt-0.5 mb-1.5 pb-2"
+            ? "ms-7 mt-1 mb-2 overflow-hidden rounded-lg border border-border/70 bg-muted/25"
             : "mt-1",
       )}
+      data-work-log-details
       onClick={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}
     >

@@ -158,6 +158,7 @@ import type {
   ComposerContextRecord,
   KnownComposerContextRecord,
 } from "@t3tools/contracts";
+import { Badge } from "../ui/badge";
 import { Button, InlineButton } from "../ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
 import { useAssetUrlRefresh, useAssetUrls, useAssetUrlState } from "../../assets/assetUrls";
@@ -174,6 +175,7 @@ import {
   SnapShotAttachmentDetails,
 } from "./SnapShotAttachmentDetails";
 import { ProposedPlanCard } from "./ProposedPlanCard";
+import { turnItemDurationMs } from "./toolCallPresentation";
 import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import { McpAppFrame } from "./McpAppFrame";
 import { ChangedFilesCard } from "./ChangedFilesTree";
@@ -1609,7 +1611,12 @@ const ConversationTimeline = memo(function ConversationTimeline({
     if (hideEmptyPlaceholder) {
       // Occupy the pane with the theme surface so a thread switch cannot
       // punch a hole through to the window chrome (white in light mode).
-      return <div className="h-full min-h-0 bg-background" data-timeline-loading="true" />;
+      return (
+        <div
+          className="h-full min-h-0 bg-background window-translucent:bg-transparent"
+          data-timeline-loading="true"
+        />
+      );
     }
     return (
       <div
@@ -3603,8 +3610,8 @@ function WorkingTimer({ createdAt }: { createdAt: string }) {
   );
 }
 
-// Matches the grouped WorkLog row's min-h-6.
-const compactWorkEntryHeight = 24;
+// Matches the grouped WorkLog row's min-h-6 plus its py-0.5.
+const compactWorkEntryHeight = 28;
 
 function ExpandedWorkGroupEntries({
   anchorKey,
@@ -4117,6 +4124,8 @@ function LiveWorkEntryTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "
               environmentId={ctx.activeThreadEnvironmentId}
               linked={false}
             />
+          ) : toolGroupAction(row.entry) === "command" ? (
+            <span className="font-mono text-xs">{label}</span>
           ) : (
             label
           )
@@ -4224,7 +4233,20 @@ function WorkGroupHeader(props: {
         </span>
       }
       trailing={
-        <TimelineRowTimestamp createdAt={props.createdAt} timestampFormat={props.timestampFormat} />
+        <>
+          <TimelineRowTimestamp
+            createdAt={props.createdAt}
+            timestampFormat={props.timestampFormat}
+          />
+          <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden>
+            <ChevronRightIcon
+              className={cn(
+                "size-3 shrink-0 text-icon-muted opacity-70 transition-transform duration-200",
+                props.expanded && "rotate-90",
+              )}
+            />
+          </span>
+        </>
       }
     />
   );
@@ -5353,7 +5375,7 @@ function buildToolCallExpandedBody(
 }
 
 const toolCallExpandedBodyClassName =
-  "max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-secondary-label text-(length:--font-size-code,var(--text-2xs)) leading-relaxed select-text";
+  "max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-secondary-label text-(length:--font-size-code,var(--text-2xs)) leading-relaxed select-text";
 
 function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
   if (workEntry.structuredPayload?.type === "notification") {
@@ -5681,6 +5703,17 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         ? "text-secondary-label"
         : "text-foreground/80";
   const threadLabel = isReasoning ? null : threadReadLabel(previewText, threadTarget);
+  // Commands read as code, and their settled outcome sits on the row itself.
+  const commandLabel = !questionHeading && toolGroupAction(workEntry) === "command";
+  const settledItem = workEntry.projectedItem?.item;
+  const settledDurationMs =
+    settledItem?.type === "command_execution" ? turnItemDurationMs(settledItem) : null;
+  const failedExitCode =
+    settledItem?.type === "command_execution" &&
+    settledItem.exitCode !== undefined &&
+    settledItem.exitCode !== 0
+      ? settledItem.exitCode
+      : null;
   const accessiblePreview = [threadLabel?.text ?? previewText, answerPreview]
     .filter(Boolean)
     .join(": ");
@@ -5726,7 +5759,12 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         <div className="min-w-0 flex-1 overflow-hidden">
           <p className="flex min-w-0 w-full items-baseline gap-1.5 text-sm leading-relaxed">
             <span
-              className={cn(answerPreview ? "min-w-0" : "min-w-0 flex-1", "truncate", headingClass)}
+              className={cn(
+                answerPreview ? "min-w-0" : "min-w-0 flex-1",
+                "truncate",
+                headingClass,
+                commandLabel && "font-mono text-xs",
+              )}
             >
               {isReasoning && !expanded ? (
                 <ReactMarkdown
@@ -5795,10 +5833,21 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
               Open subagent
             </InlineButton>
           ) : null}
-          {showFailedIndicator &&
-          !showDestructiveRowStyle &&
-          !toolIconAcceptsTint(entryToolIcon) ? (
+          {failedExitCode !== null ? (
+            <span className="flex shrink-0">
+              <Badge size="sm" variant="error">
+                exit {failedExitCode}
+              </Badge>
+            </span>
+          ) : showFailedIndicator &&
+            !showDestructiveRowStyle &&
+            !toolIconAcceptsTint(entryToolIcon) ? (
             <XIcon aria-hidden className={cn("size-3 shrink-0", failedToolIconClassName)} />
+          ) : null}
+          {settledDurationMs !== null && settledDurationMs >= 1_000 ? (
+            <span className="shrink-0 text-xs text-muted-foreground/70 tabular-nums group-hover/timeline-row:hidden group-focus-within/timeline-row:hidden">
+              {formatDuration(settledDurationMs)}
+            </span>
           ) : null}
           <TimelineRowTimestamp createdAt={workEntry.createdAt} timestampFormat={timestampFormat} />
           <span
