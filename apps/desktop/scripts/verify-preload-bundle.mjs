@@ -1,6 +1,7 @@
 import * as NodeEvents from "node:events";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
 import * as NodeTimers from "node:timers";
 import * as NodeURL from "node:url";
 import * as NodeVM from "node:vm";
@@ -92,6 +93,8 @@ const executeBundle = (source, sandboxModules) => {
     contextIsolated: true,
     // oxlint-disable-next-line t3code/no-global-process-runtime -- This standalone CI verifier supplies the preload's host platform without loading Effect.
     platform: process.platform,
+    // Electron's sandboxed preload exposes the OS version; os.release() matches it.
+    getSystemVersion: () => NodeOS.release(),
     versions: { electron: electronVersion },
   };
   const requireSandboxModule = (moduleName) => {

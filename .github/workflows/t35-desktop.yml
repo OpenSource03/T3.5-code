@@ -149,10 +149,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          prerelease=()
-          if [[ "$GITHUB_REF_NAME" == *-* ]]; then prerelease=(--prerelease); fi
+          # Always a full release: the in-app updater only reads non-prerelease releases.
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "T3.5 Code $GITHUB_REF_NAME" \
-            --notes "Unsigned builds. On macOS, right-click the app and choose Open the first time, or run: xattr -dr com.apple.quarantine \"/Applications/T3 Code (Alpha).app\"" \
-            "${prerelease[@]}"
+            --notes "Unsigned builds. On macOS, right-click the app and choose Open the first time, or run: xattr -dr com.apple.quarantine \"/Applications/T3 Code (Alpha).app\""
