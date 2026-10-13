@@ -7,6 +7,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 
 import * as Electron from "electron";
+import * as NodeOS from "node:os";
 
 import { type DesktopSnapShotEvent, DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts";
 
@@ -34,6 +35,7 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import { makeQuitShortcutHandler } from "./QuitHold.ts";
 import { copyContextMenuImage } from "./ContextMenuImage.ts";
+import { supportsWindowTranslucency } from "./windowTranslucency.ts";
 
 const TITLEBAR_HEIGHT = 40;
 // Matches --workspace-topbar-height in apps/web/src/index.css. Native macOS
@@ -146,6 +148,9 @@ export class DesktopWindow extends Context.Service<
     // which is a preview guest whenever a browser page has focus.
     readonly runMainContentsCommand: (command: MainWindowContentsCommand) => Effect.Effect<void>;
     readonly syncAppearance: Effect.Effect<void>;
+    // Turns native window translucency on or off for the open main window.
+    // New windows read the persisted client setting when they are created.
+    readonly setTranslucency: (enabled: boolean) => Effect.Effect<void>;
   }
 >()("@t3tools/desktop/window/DesktopWindow") {}
 
@@ -166,6 +171,70 @@ function getIconOption(
 
 function getInitialWindowBackgroundColor(shouldUseDarkColors: boolean): string {
   return shouldUseDarkColors ? "#0a0a0a" : "#ffffff";
+}
+
+// Window translucency: the OS material shows wherever the renderer leaves the
+// page clear (see `data-window-translucent` in apps/web/src/index.css).
+// `under-window` is the material macOS uses behind a window's own content, so
+// it tracks light/dark and reads as a tinted desktop rather than a panel.
+// `followWindow` drops to the flat inactive look while another app is focused,
+// as native windows do, and stops the live blur while the user is elsewhere.
+// Windows gets Mica, the material Microsoft specifies for long-lived windows;
+// it samples the wallpaper once instead of re-blurring what is behind.
+const MACOS_WINDOW_VIBRANCY = "under-window";
+const WINDOWS_BACKGROUND_MATERIAL = "mica";
+const TRANSPARENT_WINDOW_BACKGROUND = "#00000000";
+
+type WindowTranslucencyOptions = Pick<
+  Electron.BrowserWindowConstructorOptions,
+  "backgroundColor" | "backgroundMaterial" | "vibrancy" | "visualEffectState"
+>;
+
+function getWindowBackgroundColor(shouldUseDarkColors: boolean, translucent: boolean): string {
+  return translucent
+    ? TRANSPARENT_WINDOW_BACKGROUND
+    : getInitialWindowBackgroundColor(shouldUseDarkColors);
+}
+
+function getWindowTranslucencyOptions(
+  shouldUseDarkColors: boolean,
+  platform: NodeJS.Platform,
+  translucent: boolean,
+): WindowTranslucencyOptions {
+  const backgroundColor = getWindowBackgroundColor(shouldUseDarkColors, translucent);
+  if (platform === "darwin") {
+    return {
+      backgroundColor,
+      visualEffectState: "followWindow",
+      ...(translucent ? { vibrancy: MACOS_WINDOW_VIBRANCY } : {}),
+    };
+  }
+  if (platform === "win32" && translucent) {
+    return { backgroundColor, backgroundMaterial: WINDOWS_BACKGROUND_MATERIAL };
+  }
+  return { backgroundColor };
+}
+
+function applyWindowTranslucency(
+  window: Pick<
+    Electron.BrowserWindow,
+    "isDestroyed" | "setBackgroundColor" | "setBackgroundMaterial" | "setVibrancy"
+  >,
+  shouldUseDarkColors: boolean,
+  platform: NodeJS.Platform,
+  translucent: boolean,
+): void {
+  if (window.isDestroyed()) return;
+  if (translucent) {
+    window.setBackgroundColor(TRANSPARENT_WINDOW_BACKGROUND);
+    if (platform === "darwin") window.setVibrancy(MACOS_WINDOW_VIBRANCY);
+    else if (platform === "win32") window.setBackgroundMaterial(WINDOWS_BACKGROUND_MATERIAL);
+    return;
+  }
+  if (platform === "darwin") window.setVibrancy(null);
+  // `auto` is Electron's default, so turning it off restores the stock window.
+  else if (platform === "win32") window.setBackgroundMaterial("auto");
+  window.setBackgroundColor(getInitialWindowBackgroundColor(shouldUseDarkColors));
 }
 
 type DisplayBounds = Pick<Electron.Rectangle, "x" | "y" | "width" | "height">;
@@ -289,13 +358,14 @@ function syncWindowAppearance(
   window: Electron.BrowserWindow,
   shouldUseDarkColors: boolean,
   platform: NodeJS.Platform,
+  translucent: boolean,
 ): Effect.Effect<void> {
   return Effect.sync(() => {
     if (window.isDestroyed()) {
       return;
     }
 
-    window.setBackgroundColor(getInitialWindowBackgroundColor(shouldUseDarkColors));
+    window.setBackgroundColor(getWindowBackgroundColor(shouldUseDarkColors, translucent));
     const { titleBarOverlay } = getWindowTitleBarOptions(shouldUseDarkColors, platform);
     if (typeof titleBarOverlay === "object") {
       window.setTitleBarOverlay(titleBarOverlay);
@@ -343,6 +413,18 @@ export const make = Effect.gen(function* () {
   // The transient "Connecting to WSL" splash window, tracked separately so it
   // is never mistaken for the real main window.
   const splashWindowRef = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+  const translucencySupported = supportsWindowTranslucency(environment.platform, NodeOS.release());
+  // Windows currently showing the native material, so theme syncs keep them clear.
+  const translucentWindows = new WeakSet<Electron.BrowserWindow>();
+  const readTranslucencyPreference = clientSettings.get.pipe(
+    Effect.map(
+      Option.match({
+        onNone: () => DEFAULT_CLIENT_SETTINGS.windowTranslucency,
+        onSome: (settings) => settings.windowTranslucency,
+      }),
+    ),
+    Effect.orElseSucceed(() => DEFAULT_CLIENT_SETTINGS.windowTranslucency),
+  );
   const context = yield* Effect.context<DesktopWindowRuntimeServices>();
   const runFork = Effect.runForkWith(context);
   const runPromise = Effect.runPromiseWith(context);
@@ -383,6 +465,7 @@ export const make = Effect.gen(function* () {
     const iconPaths = yield* assets.iconPaths;
     const iconOption = getIconOption(iconPaths, environment.platform);
     const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
+    const translucent = translucencySupported && (yield* readTranslucencyPreference);
     const persistedSettings = yield* desktopSettings.get;
     const persistedBounds = persistedSettings.mainWindowBounds;
     const displayBoundsResult = yield* Effect.sync(() => {
@@ -413,7 +496,7 @@ export const make = Effect.gen(function* () {
       show: false,
       autoHideMenuBar: true,
       ...(environment.platform === "darwin" ? { disableAutoHideCursor: true } : {}),
-      backgroundColor: getInitialWindowBackgroundColor(shouldUseDarkColors),
+      ...getWindowTranslucencyOptions(shouldUseDarkColors, environment.platform, translucent),
       ...iconOption,
       title: environment.displayName,
       ...getWindowTitleBarOptions(shouldUseDarkColors, environment.platform),
@@ -437,6 +520,7 @@ export const make = Effect.gen(function* () {
     });
 
     yield* rendererHistory.register(window.webContents, { surface: "main" });
+    if (translucent) translucentWindows.add(window);
     if (environment.platform === "darwin") {
       window.setAutoHideCursor(false);
     }
@@ -1065,9 +1149,26 @@ export const make = Effect.gen(function* () {
     syncAppearance: Effect.gen(function* () {
       const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
       yield* electronWindow.syncAllAppearance((window) =>
-        syncWindowAppearance(window, shouldUseDarkColors, environment.platform),
+        syncWindowAppearance(
+          window,
+          shouldUseDarkColors,
+          environment.platform,
+          translucentWindows.has(window),
+        ),
       );
     }).pipe(Effect.withSpan("desktop.window.syncAppearance")),
+    setTranslucency: Effect.fn("desktop.window.setTranslucency")(function* (enabled) {
+      if (!translucencySupported) return;
+      const window = yield* electronWindow.main;
+      if (Option.isNone(window) || window.value.isDestroyed()) return;
+      // Client settings are saved on every settings change; only act on a flip.
+      if (translucentWindows.has(window.value) === enabled) return;
+      yield* Effect.annotateCurrentSpan({ enabled });
+      const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
+      applyWindowTranslucency(window.value, shouldUseDarkColors, environment.platform, enabled);
+      if (enabled) translucentWindows.add(window.value);
+      else translucentWindows.delete(window.value);
+    }),
   });
 });
 

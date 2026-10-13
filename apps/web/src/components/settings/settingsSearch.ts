@@ -1,5 +1,5 @@
 import { HOSTED_APP_CHANNEL } from "~/branding";
-import { isElectron } from "~/env";
+import { isElectron, isWindowTranslucencySupported } from "~/env";
 import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
 import { STATIC_KEYBINDING_COMMANDS, type KeybindingCommand } from "@t3tools/contracts";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -56,6 +56,9 @@ export interface SettingsSearchItem {
   // Its row only renders on Windows desktop, so other desktop platforms must
   // not expose a result that points to a missing anchor.
   readonly windowsOnly?: boolean;
+  // Its row only renders in a desktop app whose OS supports native window
+  // translucency (macOS, Windows 11).
+  readonly windowTranslucencyOnly?: boolean;
   // Its row renders only where the release channel can change: the desktop
   // app, or a hosted web build deployed with a channel.
   readonly releaseChannelOnly?: boolean;
@@ -265,6 +268,20 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["transparent transparency solid menus dialogs composer"],
   },
   {
+    id: "window-translucency",
+    title: "Window translucency",
+    to: "/settings/appearance",
+    searchTerms: ["transparent vibrancy blur desktop background mica acrylic glass see through"],
+    windowTranslucencyOnly: true,
+  },
+  {
+    id: "window-translucency-opacity",
+    title: "Window opacity",
+    to: "/settings/appearance",
+    searchTerms: ["translucency transparent vibrancy tint solid see through background"],
+    windowTranslucencyOnly: true,
+  },
+  {
     id: "diff-color-scheme",
     title: "Diff colors",
     to: "/settings/appearance",
@@ -275,6 +292,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Chat width",
     to: "/settings/appearance",
     searchTerms: ["wide full width column layout messages composer monitor"],
+  },
+  {
+    id: "sidebar-reveal-on-hover",
+    title: "Reveal sidebar on hover",
+    to: "/settings/appearance",
+    searchTerms: ["peek collapsed hidden left edge hover overlay show threads"],
   },
   {
     id: "panel-animations",
@@ -1168,6 +1191,7 @@ export function searchSettings(
       if (item.releaseChannelOnly && !isElectron && HOSTED_APP_CHANNEL === null) return [];
       if (item.macOnly && !isMacPlatform(platform)) return [];
       if (item.windowsOnly && !isWindowsPlatform(platform)) return [];
+      if (item.windowTranslucencyOnly && !isWindowTranslucencySupported) return [];
 
       const title = normalizeSearchText(item.title);
       const fields = [

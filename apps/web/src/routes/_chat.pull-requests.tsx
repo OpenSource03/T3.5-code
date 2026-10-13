@@ -2644,7 +2644,7 @@ function PullRequestsColumn({
     // content surface that lets it show reads as a different background than every thread.
     <div
       className={cn(
-        "@container/pr-list flex min-h-0 min-w-0 flex-col overflow-x-hidden bg-background",
+        "@container/pr-list flex min-h-0 min-w-0 flex-col overflow-x-hidden bg-background window-translucent:bg-transparent",
         maximizedAway ? "w-0 flex-none" : "flex-1",
       )}
     >
@@ -2658,7 +2658,7 @@ function PullRequestsColumn({
       <WorkspacePageHeader
         electron={isElectron}
         reserveNativeControls={!rightPanelOpen}
-        className="relative bg-background"
+        className="relative bg-background window-translucent:bg-transparent"
       >
         {titlebarControls}
         {condensed ? (

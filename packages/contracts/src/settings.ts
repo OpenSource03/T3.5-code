@@ -103,6 +103,16 @@ export const GlassOpacity = Schema.Int.check(
 );
 export type GlassOpacity = typeof GlassOpacity.Type;
 const DEFAULT_GLASS_OPACITY: GlassOpacity = 80;
+export const MIN_WINDOW_TRANSLUCENCY_OPACITY = 40;
+export const MAX_WINDOW_TRANSLUCENCY_OPACITY = 95;
+export const WindowTranslucencyOpacity = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_WINDOW_TRANSLUCENCY_OPACITY,
+    maximum: MAX_WINDOW_TRANSLUCENCY_OPACITY,
+  }),
+);
+export type WindowTranslucencyOpacity = typeof WindowTranslucencyOpacity.Type;
+const DEFAULT_WINDOW_TRANSLUCENCY_OPACITY: WindowTranslucencyOpacity = 78;
 
 export const MIN_APPEARANCE_CONTRAST = 50;
 export const MAX_APPEARANCE_CONTRAST = 200;
@@ -403,6 +413,14 @@ export const ClientSettingsSchema = Schema.Struct({
   glassOpacity: GlassOpacity.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_GLASS_OPACITY)),
   ),
+  // Desktop-only (macOS, Windows 11): the OS blurs the desktop behind the
+  // window and the app's main surfaces go slightly translucent. Other clients
+  // ignore it.
+  windowTranslucency: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // How solid the app's tint over the blurred desktop is, in percent.
+  windowTranslucencyOpacity: WindowTranslucencyOpacity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WINDOW_TRANSLUCENCY_OPACITY)),
+  ),
   fontSizeInterface: InterfaceFontSize.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_INTERFACE_FONT_SIZE)),
   ),
@@ -466,6 +484,8 @@ export const ClientSettingsSchema = Schema.Struct({
   // old keys, so everyone, including prior beta opt-outs, resets to the new
   // default sidebar.
   legacySidebarEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // Desktop layout: hovering the window's left edge reveals a collapsed sidebar as an overlay.
+  sidebarRevealOnHover: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Beta: working and monitoring threads fold into a Working shelf and return
   // to the top of the inbox once they need the user. The inbox then orders by
   // time, so manual placement there is ignored (and kept) while it is on.
@@ -1709,6 +1729,8 @@ export const ClientSettingsPatch = Schema.Struct({
   diffLayout: Schema.optionalKey(DiffLayout),
   environmentIdentificationMode: Schema.optionalKey(EnvironmentIdentificationMode),
   glassOpacity: Schema.optionalKey(GlassOpacity),
+  windowTranslucency: Schema.optionalKey(Schema.Boolean),
+  windowTranslucencyOpacity: Schema.optionalKey(WindowTranslucencyOpacity),
   onboardingCompletedAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
   fontSizeInterface: Schema.optionalKey(InterfaceFontSize),
   fontSizePrompt: Schema.optionalKey(PromptFontSize),
@@ -1734,6 +1756,7 @@ export const ClientSettingsPatch = Schema.Struct({
   proactivePanelsEnabled: Schema.optionalKey(Schema.Boolean),
   showSkillsInSlashMenu: Schema.optionalKey(Schema.Boolean),
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
+  sidebarRevealOnHover: Schema.optionalKey(Schema.Boolean),
   sidebarWorkingShelfEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(

@@ -52,7 +52,7 @@ import {
   ToastProvider,
   toastManager,
 } from "../components/ui/toast";
-import { isElectron } from "../env";
+import { isElectron, isWindowTranslucencySupported } from "../env";
 import { cn } from "../lib/utils";
 import { applyAppearanceFontVariables } from "~/appearanceFonts";
 import { applyAppearanceContrast } from "~/appearanceContrast";
@@ -318,6 +318,27 @@ function GlassAppearanceSync() {
       style.removeProperty("--glass-blur");
     }
   }, [glassOpacity]);
+
+  const windowTranslucent =
+    useClientSettings((settings) => settings.windowTranslucency) && isWindowTranslucencySupported;
+  useEffect(() => {
+    if (windowTranslucent) {
+      document.documentElement.dataset.windowTranslucent = "true";
+    } else {
+      delete document.documentElement.dataset.windowTranslucent;
+    }
+    syncBrowserChromeTheme();
+  }, [windowTranslucent]);
+
+  const windowTranslucencyOpacity = useClientSettings(
+    (settings) => settings.windowTranslucencyOpacity,
+  );
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      "--window-translucent-opacity",
+      `${windowTranslucencyOpacity}%`,
+    );
+  }, [windowTranslucencyOpacity]);
 
   return null;
 }

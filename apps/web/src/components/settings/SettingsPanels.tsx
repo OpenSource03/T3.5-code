@@ -31,6 +31,7 @@ import {
   MAX_APPEARANCE_CONTRAST,
   MAX_CODE_FONT_SIZE,
   MAX_GLASS_OPACITY,
+  MAX_WINDOW_TRANSLUCENCY_OPACITY,
   MAX_INTERFACE_FONT_SIZE,
   MAX_PANEL_ANIMATION_DURATION_MS,
   MAX_PROMPT_FONT_SIZE,
@@ -39,6 +40,7 @@ import {
   MIN_CODE_FONT_SIZE,
   MIN_APPEARANCE_CONTRAST,
   MIN_GLASS_OPACITY,
+  MIN_WINDOW_TRANSLUCENCY_OPACITY,
   MIN_INTERFACE_FONT_SIZE,
   MIN_PANEL_ANIMATION_DURATION_MS,
   MIN_PROMPT_FONT_SIZE,
@@ -69,7 +71,7 @@ import {
   resolveEnvironmentIdentificationPillLabel,
   useEnvironmentStageLabel,
 } from "../SidebarStageBackdrop";
-import { isElectron } from "../../env";
+import { isElectron, isWindowTranslucencySupported } from "../../env";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import { useCustomThemes } from "../../hooks/useCustomThemes";
 import {
@@ -544,10 +546,19 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Contrast"]
         : []),
       ...(settings.glassOpacity !== DEFAULT_UNIFIED_SETTINGS.glassOpacity ? ["Glass opacity"] : []),
+      ...(settings.windowTranslucency !== DEFAULT_UNIFIED_SETTINGS.windowTranslucency
+        ? ["Window translucency"]
+        : []),
+      ...(settings.windowTranslucencyOpacity !== DEFAULT_UNIFIED_SETTINGS.windowTranslucencyOpacity
+        ? ["Window opacity"]
+        : []),
       ...(settings.diffColorScheme !== DEFAULT_UNIFIED_SETTINGS.diffColorScheme
         ? ["Diff colors"]
         : []),
       ...(settings.chatWidth !== DEFAULT_UNIFIED_SETTINGS.chatWidth ? ["Chat width"] : []),
+      ...(settings.sidebarRevealOnHover !== DEFAULT_UNIFIED_SETTINGS.sidebarRevealOnHover
+        ? ["Reveal sidebar on hover"]
+        : []),
       ...(settings.panelAnimationDurationMs !== DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs
         ? ["Panel animations"]
         : []),
@@ -675,6 +686,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.appearanceContrast,
       settings.diffColorScheme,
       settings.chatWidth,
+      settings.sidebarRevealOnHover,
       settings.enableAgentBrowserAccess,
       settings.confirmQuit,
       settings.confirmThreadArchive,
@@ -702,6 +714,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.fontSizePrompt,
       settings.fontSizeTerminal,
       settings.glassOpacity,
+      settings.windowTranslucency,
+      settings.windowTranslucencyOpacity,
       settings.panelAnimationDurationMs,
       settings.responseStreamingMode,
       settings.persistComposerContextStrip,
@@ -792,6 +806,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       appearanceContrast: DEFAULT_UNIFIED_SETTINGS.appearanceContrast,
       diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme,
       chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth,
+      sidebarRevealOnHover: DEFAULT_UNIFIED_SETTINGS.sidebarRevealOnHover,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
       inAppNotificationsEnabled: DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled,
@@ -809,6 +824,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       contextWindowMeterEnabled: DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
+      windowTranslucency: DEFAULT_UNIFIED_SETTINGS.windowTranslucency,
+      windowTranslucencyOpacity: DEFAULT_UNIFIED_SETTINGS.windowTranslucencyOpacity,
       panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
@@ -1304,6 +1321,9 @@ export function AppearanceSettingsPanel() {
           }
         />
 
+        <WindowTranslucencyRow />
+        <WindowTranslucencyOpacityRow />
+
         {showEnvironmentIdentification ? (
           <SettingsRow
             {...searchableSetting("environment-identification")}
@@ -1455,6 +1475,32 @@ export function AppearanceSettingsPanel() {
                 </SelectPopup>
               </Select>
             </div>
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("sidebar-reveal-on-hover")}
+          description="Show the collapsed sidebar while the pointer rests on the window's left edge."
+          resetAction={
+            settings.sidebarRevealOnHover !== DEFAULT_UNIFIED_SETTINGS.sidebarRevealOnHover ? (
+              <SettingResetButton
+                label="reveal sidebar on hover"
+                onClick={() =>
+                  updateSettings({
+                    sidebarRevealOnHover: DEFAULT_UNIFIED_SETTINGS.sidebarRevealOnHover,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarRevealOnHover}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarRevealOnHover: Boolean(checked) })
+              }
+              aria-label="Reveal sidebar on hover"
+            />
           }
         />
       </SettingsSection>
@@ -1677,6 +1723,98 @@ function TerminalFontRow() {
           })}
           size={settings.fontSizeTerminal}
         />
+      }
+    />
+  );
+}
+
+function WindowTranslucencyRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  if (!isWindowTranslucencySupported) return null;
+  return (
+    <SettingsRow
+      {...searchableSetting("window-translucency")}
+      description="Let the desktop show through the window, blurred. Menus, dialogs, and code stay solid."
+      resetAction={
+        settings.windowTranslucency !== DEFAULT_UNIFIED_SETTINGS.windowTranslucency ? (
+          <SettingResetButton
+            label="window translucency"
+            onClick={() =>
+              updateSettings({ windowTranslucency: DEFAULT_UNIFIED_SETTINGS.windowTranslucency })
+            }
+          />
+        ) : null
+      }
+      control={
+        <Switch
+          checked={settings.windowTranslucency}
+          onCheckedChange={(checked) => updateSettings({ windowTranslucency: Boolean(checked) })}
+          aria-label="Window translucency"
+        />
+      }
+    />
+  );
+}
+
+function WindowTranslucencyOpacityRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  if (!isWindowTranslucencySupported || !settings.windowTranslucency) return null;
+  const ratio =
+    (settings.windowTranslucencyOpacity - MIN_WINDOW_TRANSLUCENCY_OPACITY) /
+    (MAX_WINDOW_TRANSLUCENCY_OPACITY - MIN_WINDOW_TRANSLUCENCY_OPACITY);
+  const sliderStyle: CSSProperties & Record<`--${string}`, string> = {
+    "--settings-slider-progress": `${ratio * 100}%`,
+    "--settings-slider-fill-offset": `${0.5 - ratio}rem`,
+  };
+  return (
+    <SettingsRow
+      {...searchableSetting("window-translucency-opacity")}
+      description="Lower values let more of the blurred desktop show through."
+      resetAction={
+        settings.windowTranslucencyOpacity !==
+        DEFAULT_UNIFIED_SETTINGS.windowTranslucencyOpacity ? (
+          <SettingResetButton
+            label="window opacity"
+            onClick={() =>
+              updateSettings({
+                windowTranslucencyOpacity: DEFAULT_UNIFIED_SETTINGS.windowTranslucencyOpacity,
+              })
+            }
+          />
+        ) : null
+      }
+      control={
+        <div className="flex w-full items-center gap-3 sm:w-52">
+          <output
+            className="min-w-12 rounded-md bg-muted px-2 py-1 text-center font-mono text-xs font-medium tabular-nums text-foreground"
+            htmlFor="window-translucency-opacity"
+          >
+            {settings.windowTranslucencyOpacity}%
+          </output>
+          <input
+            aria-label="Window opacity"
+            className="settings-slider min-w-0 flex-1"
+            id="window-translucency-opacity"
+            max={MAX_WINDOW_TRANSLUCENCY_OPACITY}
+            min={MIN_WINDOW_TRANSLUCENCY_OPACITY}
+            onChange={(event) => {
+              const windowTranslucencyOpacity = Number(event.currentTarget.value);
+              if (
+                Number.isInteger(windowTranslucencyOpacity) &&
+                windowTranslucencyOpacity >= MIN_WINDOW_TRANSLUCENCY_OPACITY &&
+                windowTranslucencyOpacity <= MAX_WINDOW_TRANSLUCENCY_OPACITY
+              ) {
+                updateSettings({ windowTranslucencyOpacity });
+              }
+            }}
+            step={1}
+            style={sliderStyle}
+            type="range"
+            value={settings.windowTranslucencyOpacity}
+          />
+        </div>
       }
     />
   );

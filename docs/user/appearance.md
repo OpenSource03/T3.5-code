@@ -36,6 +36,13 @@ The main sidebar, right panel, and terminal drawer open and close immediately by
 in your operating system. Moving between threads always snaps to the selected thread's panel state
 without replaying its transitions.
 
+## Window translucency
+
+In the desktop app on macOS or Windows 11, turn on **Window translucency** in
+**Settings → Appearance** to let your desktop show through the window, blurred. Menus, dialogs,
+code, terminals, and previews stay solid. **Window opacity** sets how much shows through. On macOS
+the effect dims while another app is focused.
+
 ## Custom themes
 
 On web and desktop, choose **Create theme** to adjust a palette, or import a T3 Code or VS Code

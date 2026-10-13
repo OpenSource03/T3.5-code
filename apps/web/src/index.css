@@ -4,6 +4,8 @@
 @custom-variant light (&:not(.dark, .dark *));
 /* Window Controls Overlay: active when Electron exposes native titlebar control geometry. */
 @custom-variant wco (&:is(.wco, .wco *));
+/* Native window translucency is on (desktop setting; see the end of this file). */
+@custom-variant window-translucent (&:is([data-window-translucent] *));
 
 /* Secondary hovering pointers reveal sidebar actions on touch-primary devices. */
 @custom-variant any-hover {
@@ -542,7 +544,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
       100% 100%;
     background-repeat: no-repeat;
     background-clip: text;
-    animation: live-tool-shine 2.2s steps(30) infinite;
+    /* 66 steps per 2.2s sweep caps the shimmer at 30fps: smooth to the eye at
+       roughly half the frames, and CPU, of an every-vsync linear sweep. */
+    animation: live-tool-shine 2.2s steps(66) infinite;
     animation-play-state: var(--visible-animation-state, paused);
   }
 }
@@ -601,7 +605,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     transparent 100%
   );
   mask-repeat: no-repeat;
-  animation: live-activity-focus 2.2s steps(30) infinite;
+  animation: live-activity-focus 2.2s steps(66) infinite;
   animation-play-state: var(--visible-animation-state, paused);
   will-change: var(--visible-animation-will-change, auto);
 
@@ -614,7 +618,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 @utility live-activity-focus-counter {
   width: 100%;
-  animation: live-activity-focus-counter 2.2s steps(30) infinite;
+  animation: live-activity-focus-counter 2.2s steps(66) infinite;
   animation-play-state: var(--visible-animation-state, paused);
   will-change: var(--visible-animation-will-change, auto);
 
@@ -2366,4 +2370,54 @@ code {
       );
     }
   }
+}
+
+/* Native window translucency (Settings -> Appearance, desktop only). The OS
+   blurs the desktop behind the window and it shows only where the page is
+   clear. Each outer surface keeps its own theme color at the chosen opacity
+   (sidebar, main area, themed toolbar), so tints survive. Nested full-bleed
+   layers repeat the main area's color, so they go clear
+   (`window-translucent:bg-transparent`) instead of stacking back to opaque.
+   Floating surfaces, cards, code, terminals and previews keep their own fills.
+   No backdrop-filter: the OS compositor already did the blur. Kept last so it
+   outranks the themed chat header rule. */
+html[data-window-translucent] {
+  --window-translucent-opacity: 78%;
+  background-color: transparent;
+}
+
+html[data-window-translucent] body {
+  background-color: transparent;
+}
+
+html[data-window-translucent] [data-slot="sidebar-inset"] {
+  background-color: color-mix(
+    in srgb,
+    var(--color-background) var(--window-translucent-opacity),
+    transparent
+  );
+}
+
+/* A peeking sidebar floats over the chat, so it keeps its solid fill. */
+html[data-window-translucent]
+  [data-slot="sidebar"]:not([data-peek="open"])
+  [data-slot="sidebar-inner"] {
+  background-color: color-mix(
+    in srgb,
+    var(--color-sidebar) var(--window-translucent-opacity),
+    transparent
+  );
+}
+
+/* The default header matches the main area; a theme's toolbar keeps its tint. */
+html[data-window-translucent] [data-chat-header] {
+  background-color: transparent;
+}
+
+html[data-window-translucent][data-theme-id] [data-chat-header] {
+  background-color: color-mix(
+    in srgb,
+    var(--toolbar-background) var(--window-translucent-opacity),
+    transparent
+  );
 }

@@ -1,7 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
-import { DesktopSnapShotId } from "@t3tools/contracts";
+import { DEFAULT_CLIENT_SETTINGS, DesktopSnapShotId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -55,6 +55,7 @@ import {
 } from "../ipc/channels.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
+import { supportsWindowTranslucency } from "./windowTranslucency.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
 
@@ -119,11 +120,13 @@ function makeFakeBrowserWindow() {
     }),
     restore: vi.fn(),
     setBackgroundColor: vi.fn(),
+    setBackgroundMaterial: vi.fn(),
     setAutoHideCursor: vi.fn(),
     setFullScreen: vi.fn(),
     setOpacity: vi.fn(),
     setTitle: vi.fn(),
     setTitleBarOverlay: vi.fn(),
+    setVibrancy: vi.fn(),
     setWindowButtonPosition: vi.fn(),
     show: vi.fn(),
     webContents,
@@ -150,6 +153,8 @@ function makeFakeBrowserWindow() {
     setAutoHideCursor: window.setAutoHideCursor,
     setFullScreen: window.setFullScreen,
     setOpacity: window.setOpacity,
+    setBackgroundColor: window.setBackgroundColor,
+    setVibrancy: window.setVibrancy,
     webContentsListeners,
     webContentsOnce: webContents.once,
     windowListeners,
@@ -233,6 +238,7 @@ function layerTest(input: {
   readonly previewZoomReapplies?: number[];
   readonly onReveal?: (window: Electron.BrowserWindow) => void;
   readonly focusedWindow?: Electron.BrowserWindow;
+  readonly windowTranslucency?: boolean;
 }) {
   let desktopSettings = input.desktopSettings ?? DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS;
   const layerDesktopAppSettings = Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
@@ -303,7 +309,14 @@ function layerTest(input: {
         }),
         layerDesktopEnvironment,
         layerDesktopAppSettings,
-        layerDesktopClientSettings,
+        input.windowTranslucency === undefined
+          ? layerDesktopClientSettings
+          : DesktopClientSettings.layerTest(
+              Option.some({
+                ...DEFAULT_CLIENT_SETTINGS,
+                windowTranslucency: input.windowTranslucency,
+              }),
+            ),
         layerDesktopServerExposure,
         DesktopState.layer,
         layerElectronApp,
@@ -1692,6 +1705,79 @@ describe("DesktopWindow", () => {
         ]);
         assert.equal(onReveal.mock.calls.length, 0);
         assert.equal(yield* Ref.get(createCount), 0);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it("offers window translucency only where the OS can blur behind the window", () => {
+    assert.isTrue(supportsWindowTranslucency("darwin", "15.4.0"));
+    assert.isFalse(supportsWindowTranslucency("linux", "6.8.0"));
+    assert.isFalse(supportsWindowTranslucency("win32", "10.0.19045"));
+    assert.isTrue(supportsWindowTranslucency("win32", "10.0.22621"));
+    assert.isFalse(supportsWindowTranslucency("win32", "not-a-version"));
+  });
+
+  it.effect("opens a translucent main window that theme changes keep clear", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
+      const layer = layerTest({
+        window: fakeWindow.window,
+        createCount: yield* Ref.make(0),
+        mainWindow: yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none()),
+        createdWindowOptions,
+        windowTranslucency: true,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        assert.equal(createdWindowOptions[0]?.vibrancy, "under-window");
+        assert.equal(createdWindowOptions[0]?.visualEffectState, "followWindow");
+        assert.equal(createdWindowOptions[0]?.backgroundColor, "#00000000");
+
+        yield* desktopWindow.syncAppearance;
+        assert.deepEqual(fakeWindow.setBackgroundColor.mock.lastCall, ["#00000000"]);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("toggles window translucency at runtime only when the setting flips", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
+      const layer = layerTest({
+        window: fakeWindow.window,
+        createCount: yield* Ref.make(0),
+        mainWindow: yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none()),
+        createdWindowOptions,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        assert.isUndefined(createdWindowOptions[0]?.vibrancy);
+        assert.equal(createdWindowOptions[0]?.backgroundColor, "#ffffff");
+
+        // Every client settings save reports the flag; an unchanged one is a no-op.
+        yield* desktopWindow.setTranslucency(false);
+        assert.equal(fakeWindow.setVibrancy.mock.calls.length, 0);
+
+        yield* desktopWindow.setTranslucency(true);
+        yield* desktopWindow.setTranslucency(true);
+        assert.deepEqual(fakeWindow.setVibrancy.mock.calls, [["under-window"]]);
+        assert.deepEqual(fakeWindow.setBackgroundColor.mock.lastCall, ["#00000000"]);
+
+        yield* desktopWindow.syncAppearance;
+        assert.deepEqual(fakeWindow.setBackgroundColor.mock.lastCall, ["#00000000"]);
+
+        yield* desktopWindow.setTranslucency(false);
+        assert.deepEqual(fakeWindow.setVibrancy.mock.lastCall, [null]);
+        assert.deepEqual(fakeWindow.setBackgroundColor.mock.lastCall, ["#ffffff"]);
+
+        yield* desktopWindow.syncAppearance;
+        assert.deepEqual(fakeWindow.setBackgroundColor.mock.lastCall, ["#ffffff"]);
       }).pipe(Effect.provide(layer));
     }),
   );

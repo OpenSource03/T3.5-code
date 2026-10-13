@@ -1121,6 +1121,8 @@ export interface DesktopBridge {
   getPathForFile?: (file: File) => string;
   /** The desktop client's OS platform, read from Electron's preload process. */
   getClientPlatform?: () => string;
+  /** Whether this OS can blur the desktop behind the window (macOS, Windows 11 22H2+). */
+  getWindowTranslucencySupported?: () => boolean;
   setNotificationBadge?: (badge: { count: number; image: string | null }) => Promise<void>;
   onNotificationBadgeClear?: (listener: () => void) => () => void;
   onTrackpadScrollEnd?: (listener: () => void) => () => void;

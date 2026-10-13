@@ -20,6 +20,12 @@ import { useResizeDrag } from "~/hooks/useResizeDrag";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { resolveSidebarState, type ResponsiveSidebarState } from "./sidebarState";
+import {
+  createSidebarPeekIntent,
+  resolveSidebarPeekPointer,
+  SIDEBAR_PEEK_TRIGGER_OPEN_DELAY_MS,
+  type SidebarPeekIntent,
+} from "./sidebarPeek";
 import * as Schema from "effect/Schema";
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state";
@@ -199,11 +205,162 @@ function SidebarProvider({
   );
 }
 
+/**
+ * Reveals a collapsed desktop sidebar as an overlay while the pointer rests on
+ * the window edge or the sidebar toggle, or keyboard focus moves into it. A
+ * shadow at the edge fades in as the pointer approaches. Pinning (opening the
+ * sidebar for real) or disabling ends the peek without a close animation.
+ */
+function useSidebarPeek(enabled: boolean) {
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const hintRef = React.useRef<HTMLDivElement | null>(null);
+  const intentRef = React.useRef<SidebarPeekIntent | null>(null);
+  const [peeking, setPeeking] = React.useState(false);
+  if (!enabled && peeking) setPeeking(false);
+  const open = enabled && peeking;
+
+  React.useEffect(() => {
+    const intent = createSidebarPeekIntent({
+      onOpenChange: setPeeking,
+      // Keyboard focus (mouse-clicked rows don't match) or a menu opened from the sidebar.
+      isHeld: () =>
+        containerRef.current?.querySelector(":focus-visible, [data-popup-open]") != null,
+    });
+    intentRef.current = intent;
+    return () => {
+      intent.reset();
+      intentRef.current = null;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!enabled) intentRef.current?.reset();
+  }, [enabled]);
+
+  React.useEffect(() => {
+    const container = containerRef.current;
+    const intent = intentRef.current;
+    if (!enabled || !container || !intent) return;
+    const onFocusIn = (event: FocusEvent) => {
+      if (event.target instanceof Element && event.target.matches(":focus-visible")) {
+        intent.reveal();
+      }
+    };
+    const onFocusOut = (event: FocusEvent) => {
+      if (event.relatedTarget instanceof Node && container.contains(event.relatedTarget)) return;
+      intent.requestClose();
+    };
+    container.addEventListener("focusin", onFocusIn);
+    container.addEventListener("focusout", onFocusOut);
+    return () => {
+      container.removeEventListener("focusin", onFocusIn);
+      container.removeEventListener("focusout", onFocusOut);
+    };
+  }, [enabled]);
+
+  React.useEffect(() => {
+    const container = containerRef.current;
+    const wrapper = container?.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
+    const intent = intentRef.current;
+    if (!open || !container || !wrapper || !intent) return;
+    const onPointerMove = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (container.contains(target) || target.closest("[data-sidebar='trigger']")) {
+        intent.pointerInside();
+      } else if (wrapper.contains(target)) {
+        // Menus, popovers and dialogs portal outside the layout; the pointer
+        // over one is still busy with the sidebar.
+        intent.pointerAway();
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (container.querySelector("[data-popup-open]")) return;
+      const focused = document.activeElement;
+      const focusInside = focused !== null && container.contains(focused);
+      if (!focusInside && focused !== null && focused !== document.body) return;
+      intent.dismiss();
+      if (!focusInside) return;
+      const trigger = Array.from(
+        wrapper.querySelectorAll<HTMLElement>("[data-sidebar='trigger']"),
+      ).find((element) => !container.contains(element));
+      if (trigger) trigger.focus();
+      else if (focused instanceof HTMLElement) focused.blur();
+    };
+    document.addEventListener("pointermove", onPointerMove);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  // Watches the pointer while collapsed. Pointer events are already one per
+  // frame, and the shadow only changes opacity, so this never repaints layout.
+  React.useEffect(() => {
+    const container = containerRef.current;
+    const wrapper = container?.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
+    const intent = intentRef.current;
+    const hint = hintRef.current;
+    if (!enabled || open || !container || !wrapper || !intent || !hint) return;
+    const trigger = Array.from(
+      wrapper.querySelectorAll<HTMLElement>("[data-sidebar='trigger']"),
+    ).find((element) => !container.contains(element));
+    const setHint = (value: number) => {
+      hint.style.opacity = String(value);
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (event.pointerType === "touch" || event.buttons !== 0) {
+        intent.edgeLeave();
+        setHint(0);
+        return;
+      }
+      const { zone, hint: strength } = resolveSidebarPeekPointer({
+        x: event.clientX,
+        y: event.clientY,
+        titlebarBottom: trigger?.getBoundingClientRect().bottom ?? 0,
+        overTrigger:
+          event.target instanceof Element &&
+          event.target.closest("[data-sidebar='trigger']") !== null,
+      });
+      setHint(strength);
+      if (zone === "trigger") intent.edgeEnter(SIDEBAR_PEEK_TRIGGER_OPEN_DELAY_MS);
+      else if (zone === "wall") intent.edgeEnter(0);
+      else if (zone === "edge") intent.edgeEnter();
+      else intent.edgeLeave();
+    };
+    const onPointerLeaveWindow = () => {
+      intent.edgeLeave();
+      setHint(0);
+    };
+    document.addEventListener("pointermove", onPointerMove, { passive: true });
+    document.documentElement.addEventListener("pointerleave", onPointerLeaveWindow);
+    return () => {
+      document.removeEventListener("pointermove", onPointerMove);
+      document.documentElement.removeEventListener("pointerleave", onPointerLeaveWindow);
+      setHint(0);
+    };
+  }, [enabled, open]);
+
+  const edge = enabled ? (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none fixed inset-y-0 left-0 z-40 w-16 bg-linear-to-r from-foreground/5 via-foreground/1 to-transparent opacity-0 transition-opacity duration-100 ease-out motion-reduce:transition-none"
+      data-slot="sidebar-peek-hint"
+      ref={hintRef}
+    />
+  ) : null;
+
+  return { containerRef, edge, open };
+}
+
 function Sidebar({
   side = "left",
   variant = "sidebar",
   collapsible = "offcanvas",
   resizable = false,
+  peekOnHover = false,
   className,
   children,
   ...props
@@ -212,8 +369,21 @@ function Sidebar({
   variant?: "sidebar" | "floating" | "inset";
   collapsible?: "offcanvas" | "icon" | "none";
   resizable?: boolean | SidebarResizableOptions;
+  /** Reveal the collapsed desktop sidebar as an overlay from the window edge. Left offcanvas only. */
+  peekOnHover?: boolean;
 }) {
   const { isMobile, state, openMobile, setOpenMobile, setMobileSheetElement } = useSidebar();
+  const {
+    containerRef: peekContainerRef,
+    edge: peekEdge,
+    open: peekOpen,
+  } = useSidebarPeek(
+    peekOnHover &&
+      !isMobile &&
+      side === "left" &&
+      collapsible === "offcanvas" &&
+      state === "collapsed",
+  );
   const resolvedResizable = React.useMemo<SidebarResolvedResizableOptions | null>(() => {
     if (isMobile || collapsible === "none" || !resizable) {
       return null;
@@ -296,11 +466,13 @@ function Sidebar({
       <div
         className="group peer hidden text-sidebar-foreground md:block"
         data-collapsible={state === "collapsed" ? collapsible : ""}
+        data-peek={peekOpen ? "open" : undefined}
         data-side={side}
         data-slot="sidebar"
         data-state={state}
         data-variant={variant}
       >
+        {peekEdge}
         {/* This is what handles the sidebar gap on desktop */}
         <div
           className={cn(
@@ -317,7 +489,13 @@ function Sidebar({
         <div
           className={cn(
             "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) md:flex",
-            "[[data-panel-animations=true]_&]:transition-[left,right,width] [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
+            // Panel animations also carry translate, so pinning a peek moves left and
+            // translate in lockstep and the sidebar stays put.
+            "[[data-panel-animations=true]_&]:transition-[left,right,width,translate] [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
+            // Peek slides over the content. Expanded drops this transition so pinning is instant.
+            state === "collapsed" &&
+              "transition-[translate] duration-150 ease-out motion-reduce:transition-none",
+            "group-data-[state=collapsed]:z-45 group-data-[peek=open]:translate-x-(--sidebar-width) group-data-[peek=open]:shadow-xl",
             side === "left"
               ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
               : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
@@ -328,6 +506,7 @@ function Sidebar({
             className,
           )}
           data-slot="sidebar-container"
+          ref={peekContainerRef}
           {...props}
         >
           <div

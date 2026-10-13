@@ -304,8 +304,12 @@ export function syncBrowserChromeTheme() {
   const backgroundColor = themeChromeColor ?? surfaceColor ?? fallbackColor;
   if (!backgroundColor) return;
 
-  document.documentElement.style.backgroundColor = backgroundColor;
-  document.body.style.backgroundColor = backgroundColor;
+  // A translucent window shows the OS blur through html/body, so their
+  // stylesheet tint must not be covered by an opaque inline fill.
+  const pageBackground =
+    document.documentElement.dataset.windowTranslucent === undefined ? backgroundColor : "";
+  document.documentElement.style.backgroundColor = pageBackground;
+  document.body.style.backgroundColor = pageBackground;
   // Update every theme-color meta so any element another layer added (for
   // example a media-scoped one) carries the resolved color too.
   const themeColorMetas = document.querySelectorAll<HTMLMetaElement>(
