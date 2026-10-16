@@ -153,4 +153,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "T3.5 Code $GITHUB_REF_NAME" \
-            --notes "Unsigned builds. On macOS, right-click the app and choose Open the first time, or run: xattr -dr com.apple.quarantine \"/Applications/T3 Code (Alpha).app\""
+            --notes "Unsigned builds. On macOS, right-click the app and choose Open the first time, or run: xattr -dr com.apple.quarantine \"/Applications/T3.5 Code.app\""
